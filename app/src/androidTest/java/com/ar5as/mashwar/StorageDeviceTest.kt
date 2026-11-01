@@ -37,7 +37,7 @@ class StorageDeviceTest {
             override fun onUpgrade(db:androidx.sqlite.db.SupportSQLiteDatabase,oldVersion:Int,newVersion:Int) {}
         }).build()
         FrameworkSQLiteOpenHelperFactory().create(cfg).use { it.writableDatabase }
-        val db=Room.databaseBuilder(context,RideDb::class.java,name).addMigrations(RideDb.MIGRATION_1_2,RideDb.MIGRATION_2_3).build()
+        val db=Room.databaseBuilder(context,RideDb::class.java,name).addMigrations(RideDb.MIGRATION_1_2,RideDb.MIGRATION_2_3,RideDb.MIGRATION_3_4).build()
         try {
             val row=db.observations().all().single(); assertEquals(50.0,row.price,0.001); assertNull(row.actualPaid)
             db.observations().setFeedback(row.id,60.0,55.0,true)
@@ -48,6 +48,12 @@ class StorageDeviceTest {
             assertEquals(1,db.observations().all().size)
             assertEquals(60.0,db.observations().all().single().actualPaid!!,0.001)
             assertEquals(1,db.observations().allPickups().size)
+            val started=System.currentTimeMillis()-600_000
+            assertTrue(db.observations().startMeasuredTrip(row,started)); assertFalse(db.observations().startMeasuredTrip(row,started))
+            val active=db.observations().allTraffic().single(); assertEquals("ACTIVE",active.kind)
+            assertEquals(1,db.observations().finishTraffic(active.id,started,10.0,started+600_000))
+            assertEquals("MEASURED",db.observations().allTraffic().single().kind)
+            db.observations().deleteWithOrphanTraffic(row); assertTrue(db.observations().allTraffic().isEmpty())
         } finally { db.close(); context.deleteDatabase(name) }
     }
 }

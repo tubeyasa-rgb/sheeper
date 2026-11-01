@@ -24,4 +24,19 @@ class MigrationTest {
             } }
         }
     }
+    @Test fun migrateV3AddsTrafficWithoutChangingExistingTrips() {
+        Class.forName("org.sqlite.JDBC")
+        DriverManager.getConnection("jdbc:sqlite::memory:").use { sql ->
+            sql.createStatement().use { it.execute("CREATE TABLE observations (id INTEGER PRIMARY KEY, origin TEXT)"); it.execute("INSERT INTO observations VALUES (1,'home')") }
+            val db=Proxy.newProxyInstance(SupportSQLiteDatabase::class.java.classLoader,arrayOf(SupportSQLiteDatabase::class.java)) { _,method,args ->
+                if(method.name=="execSQL" && args?.size==1) { sql.createStatement().use { it.execute(args[0] as String) }; null } else throw UnsupportedOperationException(method.name)
+            } as SupportSQLiteDatabase
+            RideDb.MIGRATION_3_4.migrate(db)
+            sql.createStatement().use { statement ->
+                statement.executeQuery("SELECT origin FROM observations WHERE id=1").use { assertTrue(it.next()); assertEquals("home",it.getString(1)) }
+                statement.execute("INSERT INTO traffic_samples (origin,destination,provider,category,kind,minutes,startedAt,recordedAt) VALUES ('home','work','app','class','MEASURED',10,1000,601000)")
+                statement.executeQuery("SELECT minutes FROM traffic_samples").use { assertTrue(it.next()); assertEquals(10.0,it.getDouble(1),0.001) }
+            }
+        }
+    }
 }
