@@ -65,7 +65,9 @@ class ComposeActivity : ComponentActivity() {
     var provider by remember { mutableStateOf("") }; var category by remember { mutableStateOf("") }; var price by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }; var recognized by remember { mutableStateOf("") }; var password by remember { mutableStateOf("") }
     var deleteConfirm by remember { mutableStateOf(false) }; var deleteItem by remember { mutableStateOf<Observation?>(null) }; var source by remember { mutableStateOf("USER_ENTERED") }
-    var selectedId by remember { mutableLongStateOf(0L) }; var etaInput by rememberSaveable { mutableStateOf("") }; var paid by remember { mutableStateOf("") }; var accepted by remember { mutableStateOf("") }; var success by remember { mutableStateOf<Boolean?>(null) }
+    var selectedId by remember { mutableLongStateOf(0L) }; var etaInput by rememberSaveable { mutableStateOf("") }; var distanceInput by rememberSaveable { mutableStateOf("") }
+    var routeText by remember { mutableStateOf("") }; var routeDurations by remember { mutableStateOf<List<ParsedMeasure>>(emptyList()) }; var routeDistances by remember { mutableStateOf<List<ParsedMeasure>>(emptyList()) }; var distanceFromImage by remember { mutableStateOf(false) }
+    var paid by remember { mutableStateOf("") }; var accepted by remember { mutableStateOf("") }; var success by remember { mutableStateOf<Boolean?>(null) }
     var pickupName by remember { mutableStateOf("") }; var pickupNote by remember { mutableStateOf("") }; var pickupStatus by remember { mutableStateOf("UNKNOWN") }
     var walkMeters by remember { mutableStateOf("") }; var walkMinutes by remember { mutableStateOf("") }; var direct by remember { mutableStateOf(false) }
     var comparisonOrigin by rememberSaveable { mutableStateOf("") }; var maxWalkMeters by rememberSaveable { mutableStateOf("500") }; var maxWalkMinutes by rememberSaveable { mutableStateOf("10") }
@@ -137,6 +139,23 @@ class ComposeActivity : ComponentActivity() {
         try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
         catch (_: android.content.ActivityNotFoundException) { message = "مفيش تطبيق خرائط أو متصفح متاح على الجهاز." }
     }
+    fun resetRouteInput() { etaInput=""; distanceInput=""; routeText=""; routeDurations=emptyList(); routeDistances=emptyList(); distanceFromImage=false }
+    fun applyRouteText(text:String) {
+        val parsed=TrafficTextParser.parse(text); routeText=text.take(5000); routeDurations=parsed.durations; routeDistances=parsed.distances
+        etaInput=if(parsed.durations.size==1) parsed.durations.single().value.toString() else ""
+        distanceInput=if(parsed.distances.size==1) parsed.distances.single().value.toString() else ""
+        distanceFromImage=parsed.distances.size==1
+        message=if(parsed.durations.isNotEmpty() || parsed.distances.isNotEmpty()) "راجع المدة والمسافة واختار المسار الصحيح قبل الحفظ." else "لم نقرأ مدة أو مسافة بوضوح؛ تقدر تكتبهم يدويًا."
+    }
+    fun scanRoute(uri:Uri) {
+        val quoteId=selectedId
+        try {
+            message="بنقرأ صورة المسار على الجهاز..."
+            val image=InputImage.fromFilePath(context,uri)
+            val recognizer=TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            recognizer.process(image).addOnSuccessListener { if(screen=="traffic" && selectedId==quoteId) applyRouteText(it.text) }.addOnFailureListener { if(screen=="traffic" && selectedId==quoteId) message="تعذرت قراءة الصورة؛ تقدر تكتب المدة والمسافة يدويًا." }.addOnCompleteListener { recognizer.close() }
+        } catch (_:Exception) { message="تعذّر فتح الصورة؛ أدخل بيانات المسار يدويًا." }
+    }
     fun scan(uri: Uri) {
         try {
             message="جارٍ قراءة الصورة على الجهاز..."
@@ -145,6 +164,7 @@ class ComposeActivity : ComponentActivity() {
         } catch (_: Exception) { message="تعذّر فتح الصورة؛ أدخل العرض يدويًا." }
     }
     val pick=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? -> if(uri != null) scan(uri) }
+    val pickRoute=rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? -> if(uri != null) scanRoute(uri) }
     val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri: Uri? ->
         if(uri != null) scope.launch { try { val data=withContext(Dispatchers.IO) { Backup.encode(dao.all(),dao.allPickups(),password,dao.allTraffic()) }; withContext(Dispatchers.IO) { requireNotNull(context.contentResolver.openOutputStream(uri)).use { it.write(data) } }; message="تم حفظ النسخة المشفرة." } catch (_: Exception) { message="تعذر حفظ النسخة." } }
     }
@@ -166,7 +186,7 @@ class ComposeActivity : ComponentActivity() {
     Surface(modifier=Modifier.fillMaxSize(), color=MaterialTheme.colorScheme.background) { Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal=20.dp, vertical=18.dp), verticalArrangement=Arrangement.spacedBy(12.dp)) {
         if (screen != "home") {
             TextButton(onClick={screen="home";message=""}, contentPadding=PaddingValues(0.dp)) { Text("‹  الرئيسية", fontWeight=FontWeight.Bold) }
-            Text(when(screen) { "capture" -> "إضافة عرض"; "history" -> "عروضي"; "forecast" -> "التوقعات"; "feedback" -> "نتيجة الرحلة"; "traffic" -> "مدة الرحلة والزحمة"; "pickups" -> "نقاط الالتقاء"; "research" -> "البحث والخرائط"; else -> "الإعدادات" },style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)
+            Text(when(screen) { "capture" -> "إضافة عرض"; "history" -> "عروضي"; "forecast" -> "التوقعات"; "feedback" -> "نتيجة الرحلة"; "traffic" -> "مدة الرحلة والزحمة"; "trafficSelect" -> "اختار العرض"; "pickups" -> "نقاط الالتقاء"; "research" -> "البحث والخرائط"; else -> "الإعدادات" },style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)
         }
         if(message.isNotBlank()) Surface(color=Color(0xffe7f2e6), shape=RoundedCornerShape(12.dp), modifier=Modifier.fillMaxWidth()) { Text(message, modifier=Modifier.padding(12.dp), color=MaterialTheme.colorScheme.primary) }
         when(screen) {
@@ -187,7 +207,10 @@ class ComposeActivity : ComponentActivity() {
                         OutlinedTextField(price,{price=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("السعر بالجنيه")},shape=RoundedCornerShape(14.dp))
                         OutlinedButton(onClick={pick.launch("image/*")},modifier=Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp)) { Text("اختيار صورة لقراءة النص") }
                         Text("الصورة لا تُحفظ. راجع النص والسعر قبل التأكيد.",style=MaterialTheme.typography.bodySmall,color=Color(0xff6d7c72))
-                        if(recognized.isNotBlank()) Text("النص المقروء للمراجعة:\n$recognized",style=MaterialTheme.typography.bodySmall)
+                        if(recognized.isNotBlank()) {
+                            Text("النص المقروء للمراجعة:\n$recognized",style=MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick={message="";screen="trafficSelect"},modifier=Modifier.fillMaxWidth()) { Text("استخدم الصورة لبيانات الطريق") }
+                        }
                         Button(onClick={
                             val n=Logic.parsePrice(price); val texts=listOf(origin,destination,provider,category)
                             if(n==null || texts.any { it.isBlank() || it.length>200 }) message="أكمل البيانات وأدخل سعرًا صحيحًا."
@@ -223,7 +246,7 @@ class ComposeActivity : ComponentActivity() {
                                 OutlinedButton(onClick={selectedId=item.id; paid=item.actualPaid?.toString()?:""; accepted=item.acceptedFare?.toString()?:""; success=item.bookingSuccess; screen="feedback"}) { Text("تسجيل نتيجة الرحلة") }
                                 TextButton(onClick={deleteItem=item}) { Text("حذف") }
                             }
-                            OutlinedButton(onClick={selectedId=item.id;etaInput="";message="";screen="traffic"}) { Text("مدة الرحلة والزحمة") }
+                            OutlinedButton(onClick={selectedId=item.id;resetRouteInput();message="";screen="traffic"}) { Text("مدة الرحلة والزحمة") }
                         }
                     }
                 }
@@ -245,6 +268,11 @@ class ComposeActivity : ComponentActivity() {
                     else scope.launch { dao.setFeedback(selectedId,p,a,success); message="تم حفظ نتيجة الرحلة."; screen="history" }
                 }) { Text("حفظ النتيجة") }
             }
+            "trafficSelect" -> {
+                Text("اختار العرض اللي صورة الطريق تخصه، وراجع المدة والمسافة قبل الحفظ.")
+                if(items.isEmpty()) Text("سجّل عرض الرحلة أولًا، وبعدها اختار الصورة من شاشة مدة الرحلة.")
+                items.forEach { item -> OutlinedButton(onClick={selectedId=item.id;resetRouteInput();applyRouteText(recognized);screen="traffic"},modifier=Modifier.fillMaxWidth()) { Text("${item.origin} ← ${item.destination} · ${item.provider} ${item.category}") } }
+            }
             "traffic" -> {
                 val trip=items.firstOrNull { it.id==selectedId }
                 if(trip==null) Text("العرض لم يعد موجودًا.") else {
@@ -262,12 +290,22 @@ class ComposeActivity : ComponentActivity() {
                     }
                     HorizontalDivider()
                     Text("مدة الطريق الحالية",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
-                    Text("افتح المسار في الخرائط وأدخل المدة الظاهرة. التطبيق لا يقرأ مدة Google Maps تلقائيًا.")
+                    Text("افتح المسار في Google Maps، ثم شارك صورة حديثة أو اختارها هنا. راجع المدة والمسافة؛ القراءة قد تخطئ مع العربية ووقت الحفظ لا يثبت وقت التصوير.")
                     OutlinedButton(onClick={ val link=MapsLinks.forTrip(trip.origin,trip.destination); if(link!=null) try { context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(link))) } catch (_:android.content.ActivityNotFoundException) { message="لا يوجد تطبيق خرائط أو متصفح متاح." } }) { Text("افتح مسار الرحلة") }
-                    OutlinedTextField(etaInput,{etaInput=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("المدة المتوقعة الآن بالدقائق")})
-                    Button(onClick={ val minutes=Logic.parsePrice(etaInput); if(minutes==null||minutes>1440) message="أدخل مدة صالحة أكبر من صفر وحتى ١٤٤٠ دقيقة." else scope.launch { dao.insertTraffic(TrafficSample(origin=trip.origin,destination=trip.destination,provider=trip.provider,category=trip.category,kind="USER_ESTIMATE",minutes=minutes,recordedAt=System.currentTimeMillis())); etaInput="";message="تم حفظ المدة التي أدخلتها." } }) { Text("استخدم المدة للحساب") }
+                    OutlinedButton(onClick={pickRoute.launch("image/*")}) { Text("اقرأ صورة الطريق") }
+                    if(routeText.isNotBlank()) Text("النص المقروء للمراجعة:\n$routeText",style=MaterialTheme.typography.bodySmall)
+                    if(routeDurations.size>1) { Text("الصورة فيها أكثر من مدة؛ اختار مدة المسار:"); routeDurations.forEach { candidate -> OutlinedButton(onClick={etaInput=candidate.value.toString()}) { Text(candidate.text) } } }
+                    if(routeDistances.size>1) { Text("الصورة فيها أكثر من مسافة؛ اختار مسافة نفس المسار:"); routeDistances.forEach { candidate -> OutlinedButton(onClick={distanceInput=candidate.value.toString();distanceFromImage=true}) { Text(candidate.text) } } }
+                    OutlinedTextField(etaInput,{etaInput=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("المدة المتوقعة بالدقائق")})
+                    OutlinedTextField(distanceInput,{distanceInput=it;distanceFromImage=false},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("المسافة بالكيلومتر · اختياري")})
+                    Button(onClick={
+                        val minutes=Logic.parsePrice(etaInput); val distance=if(distanceInput.isBlank()) null else Logic.parsePrice(distanceInput)
+                        if(minutes==null||minutes>1440||(distanceInput.isNotBlank()&&(distance==null||distance>2000))) message="أدخل مدة ومسافة صحيحتين، وراجع وحدة المسافة بالكيلومتر."
+                        else scope.launch { dao.insertTraffic(TrafficSample(origin=trip.origin,destination=trip.destination,provider=trip.provider,category=trip.category,kind="USER_ESTIMATE",minutes=minutes,recordedAt=System.currentTimeMillis(),distanceKm=distance,inputSource=if(distanceFromImage && distance!=null) "CONFIRMED_IMAGE" else "MANUAL")); resetRouteInput();message="اتحفظت بيانات المسار بعد تأكيدك." }
+                    }) { Text("تأكيد بيانات المسار واستخدامها") }
                     val comparison=TrafficEngine.compareCurrent(traffic,trip,now)
                     val currentEstimate=TrafficEngine.currentEstimate(traffic,trip,now)
+                    QuoteEvaluationCard(items,trip,currentEstimate,now)
                     if(comparison!=null) Text("المدة التي أدخلتها ${"%.1f".format(comparison.currentMinutes)} دقيقة؛ الزمن السريع في سجلك ${"%.1f".format(comparison.fastBaselineMinutes)} دقيقة. الفرق ${"%+.1f".format(comparison.differenceMinutes)} دقيقة (${"%+.0f".format(comparison.percentChange)}٪) من ${comparison.sampleCount} رحلة عبر ${comparison.days} أيام.")
                     else if(currentEstimate!=null) Text("تم حفظ المدة الحالية. نحتاج ١٠ رحلات مقاسة عبر ٥ أيام لنقارنها بالزمن السريع المعتاد.")
                     else Text("لا توجد مدة حالية مدخلة خلال آخر ٣ دقائق.")
@@ -289,10 +327,11 @@ class ComposeActivity : ComponentActivity() {
                     Text("${reference.provider} · ${reference.category} · ${reference.origin} ← ${reference.destination}",style=MaterialTheme.typography.bodySmall)
                     val road=TrafficEngine.compareCurrent(traffic,reference,now)
                     val eta=TrafficEngine.currentEstimate(traffic,reference,now)
+                    QuoteEvaluationCard(items,reference,eta,now)
                     if(road!=null) Text("مدة الطريق المدخلة ${"%.1f".format(road.currentMinutes)} د؛ الفرق عن الزمن السريع في سجلك ${"%+.1f".format(road.differenceMinutes)} د (${"%+.0f".format(road.percentChange)}٪). لا يحدد سبب التأخير.")
                     else if(eta!=null) Text("مدة الطريق المدخلة ${"%.1f".format(eta.minutes)} دقيقة؛ سجل رحلات أكثر للمقارنة التاريخية.")
                     else Text("مدة الطريق الحالية غير متاحة. أدخلها من الخرائط لتدخل في مقارنة تكلفة الوقت عند توفر سجل كافٍ.")
-                    OutlinedButton(onClick={selectedId=reference.id;etaInput="";screen="traffic"}) { Text("مدة الرحلة والزحمة") }
+                    OutlinedButton(onClick={selectedId=reference.id;resetRouteInput();message="";screen="traffic"}) { Text("مدة الرحلة والزحمة") }
                     if(analysisRunning) Text("بنحسب من سجل أسعارك ومدد رحلاتك…") else {
                         val fastest=TrafficEngine.fastestDeparture(traffic,reference,now,travelPredictions)
                         if(fastest!=null) Text(if(fastest.waitMinutes==0) "أسرع وصول متوقع: التحرك الآن، وفق المدة المدخلة وتاريخ رحلاتك." else "أسرع وصول متوقع: انتظر ${fastest.waitMinutes} دقيقة، بفارق ${"%.1f".format(fastest.savedMinutes)} دقيقة عن الآن. التقدير من تاريخ رحلاتك، وليس قراءة مرور مباشرة.",fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary)

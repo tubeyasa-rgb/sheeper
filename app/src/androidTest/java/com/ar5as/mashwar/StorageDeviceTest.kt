@@ -37,7 +37,7 @@ class StorageDeviceTest {
             override fun onUpgrade(db:androidx.sqlite.db.SupportSQLiteDatabase,oldVersion:Int,newVersion:Int) {}
         }).build()
         FrameworkSQLiteOpenHelperFactory().create(cfg).use { it.writableDatabase }
-        val db=Room.databaseBuilder(context,RideDb::class.java,name).addMigrations(RideDb.MIGRATION_1_2,RideDb.MIGRATION_2_3,RideDb.MIGRATION_3_4).build()
+        val db=Room.databaseBuilder(context,RideDb::class.java,name).addMigrations(RideDb.MIGRATION_1_2,RideDb.MIGRATION_2_3,RideDb.MIGRATION_3_4,RideDb.MIGRATION_4_5).build()
         try {
             val row=db.observations().all().single(); assertEquals(50.0,row.price,0.001); assertNull(row.actualPaid)
             db.observations().setFeedback(row.id,60.0,55.0,true)
