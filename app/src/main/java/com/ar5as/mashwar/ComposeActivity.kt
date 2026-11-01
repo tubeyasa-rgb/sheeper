@@ -66,8 +66,19 @@ class ComposeActivity : ComponentActivity() {
     var deleteConfirm by remember { mutableStateOf(false) }; var source by remember { mutableStateOf("USER_ENTERED") }
     var selectedId by remember { mutableLongStateOf(0L) }; var paid by remember { mutableStateOf("") }; var accepted by remember { mutableStateOf("") }; var success by remember { mutableStateOf<Boolean?>(null) }
     var pickupName by remember { mutableStateOf("") }; var pickupNote by remember { mutableStateOf("") }; var pickupStatus by remember { mutableStateOf("UNKNOWN") }
-    var forecasts by remember { mutableStateOf<List<Pair<Int,ForecastResult?>>>(emptyList()) }
-    LaunchedEffect(items, now / 60000, screen) { if(screen == "forecast") { val reference=items.firstOrNull(); forecasts=withContext(Dispatchers.Default) { listOf(0,5,10,15,30).map { minutes -> minutes to reference?.let { ForecastEngine.forecast(items.filter { row -> row.captured <= now },it,now + minutes * 60_000L) } } } } }
+    var walkMeters by remember { mutableStateOf("") }; var walkMinutes by remember { mutableStateOf("") }; var direct by remember { mutableStateOf(false) }
+    var comparisonOrigin by rememberSaveable { mutableStateOf("") }; var maxWalkMeters by rememberSaveable { mutableStateOf("500") }; var maxWalkMinutes by rememberSaveable { mutableStateOf("10") }
+    var valueOfTime by rememberSaveable { mutableStateOf("0") }; var maxWait by rememberSaveable { mutableIntStateOf(30) }
+    var options by remember { mutableStateOf<List<DepartureOption>>(emptyList()) }; var peakHours by remember { mutableStateOf<List<PeakHour>>(emptyList()) }; var cheaperHours by remember { mutableStateOf<List<PeakHour>>(emptyList()) }; var analysisRunning by remember { mutableStateOf(false) }
+    val reference = remember(items,comparisonOrigin,destination) { items.firstOrNull { (comparisonOrigin.isBlank() || Logic.same(it.origin,comparisonOrigin)) && (destination.isBlank() || Logic.same(it.destination,destination)) } }
+    LaunchedEffect(items, now / 60000, screen, valueOfTime, maxWait, comparisonOrigin, destination) {
+        if(screen == "forecast") {
+            analysisRunning=true; options=emptyList(); peakHours=emptyList(); cheaperHours=emptyList()
+            val timeValue=Logic.parseNonNegative(valueOfTime)
+            val result=withContext(Dispatchers.Default) { if(reference==null||timeValue==null) Triple(emptyList(),emptyList(),emptyList()) else Triple(ForecastEngine.departureOptions(items,reference,now,timeValue,maxWait),ForecastEngine.peakHours(items,reference,now),ForecastEngine.cheaperHours(items,reference,now)) }
+            options=result.first; peakHours=result.second; cheaperHours=result.third; analysisRunning=false
+        }
+    }
     BackHandler(enabled = screen != "home") { screen = "home"; message = "" }
     fun locate() {
         if (locating) return
@@ -79,6 +90,7 @@ class ComposeActivity : ComponentActivity() {
                 when (val result = currentLocation(context)) {
                     is LocationResult.Found -> {
                         origin = String.format(java.util.Locale.US, "%.6f,%.6f", result.location.latitude, result.location.longitude)
+                        comparisonOrigin = origin
                         locationInfo = "تم تحديد موقعك. تقدر تعدله قبل فتح الخرائط."
                     }
                     LocationResult.PermissionRequired -> locationInfo = "اسمح بالوصول للموقع عشان نحدد مكانك، أو اكتب نقطة الانطلاق يدويًا."
@@ -154,7 +166,7 @@ class ComposeActivity : ComponentActivity() {
         }
         if(message.isNotBlank()) Surface(color=Color(0xffe7f2e6), shape=RoundedCornerShape(12.dp), modifier=Modifier.fillMaxWidth()) { Text(message, modifier=Modifier.padding(12.dp), color=MaterialTheme.colorScheme.primary) }
         when(screen) {
-            "home" -> TripHome(origin=origin, onOriginChange={ origin=it; locationInfo="" }, destination=destination, onDestinationChange={destination=it; selectedDestinationCoordinates=null; places=emptyList(); placesMessage=""}, locating=locating, locationInfo=locationInfo, showLocationSettings=showLocationSettings, searchingPlaces=searchingPlaces, places=places, placesMessage=placesMessage, onLocate={requestCurrentLocation()}, onLocationSettings={ try { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) } catch (_: android.content.ActivityNotFoundException) { locationInfo="افتح إعدادات الجهاز وشغّل الموقع." } }, onFindPlaces={findPlaces()}, onPlaceSelected={ place -> destination=place.label; selectedDestinationCoordinates=String.format(java.util.Locale.US, "%.6f,%.6f", place.latitude, place.longitude); places=emptyList(); placesMessage="تم اختيار المكان." }, onOpenMaps={openTripInMaps()}, onNavigate={screen=it;message=""})
+            "home" -> TripHome(origin=origin, onOriginChange={ origin=it; comparisonOrigin=it; locationInfo="" }, destination=destination, onDestinationChange={destination=it; selectedDestinationCoordinates=null; places=emptyList(); placesMessage=""}, locating=locating, locationInfo=locationInfo, showLocationSettings=showLocationSettings, searchingPlaces=searchingPlaces, places=places, placesMessage=placesMessage, onLocate={requestCurrentLocation()}, onLocationSettings={ try { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) } catch (_: android.content.ActivityNotFoundException) { locationInfo="افتح إعدادات الجهاز وشغّل الموقع." } }, onFindPlaces={findPlaces()}, onPlaceSelected={ place -> destination=place.label; selectedDestinationCoordinates=String.format(java.util.Locale.US, "%.6f,%.6f", place.latitude, place.longitude); places=emptyList(); placesMessage="تم اختيار المكان." }, onOpenMaps={openTripInMaps()}, onNavigate={screen=it;message=""})
             "capture" -> {
                 Text("سجّل السعر اللي ظهر لك في تطبيق المشاوير.", style=MaterialTheme.typography.bodyLarge, color=Color(0xff61756b))
                 Surface(color=Color.White,shape=RoundedCornerShape(22.dp),shadowElevation=1.dp,modifier=Modifier.fillMaxWidth()) {
@@ -176,7 +188,7 @@ class ComposeActivity : ComponentActivity() {
                             val n=Logic.parsePrice(price); val texts=listOf(origin,destination,provider,category)
                             if(n==null || texts.any { it.isBlank() || it.length>200 }) message="أكمل البيانات وأدخل سعرًا صحيحًا."
                             else { val item=Observation(origin=origin.trim(),destination=destination.trim(),provider=provider.trim(),category=category.trim(),price=n,captured=System.currentTimeMillis(),provenance=source)
-                                scope.launch { if(dao.all().any { Logic.duplicate(it,item) }) message="العرض مسجل بالفعل خلال ٩٠ ثانية." else { dao.insert(item); message="تم تأكيد العرض وحفظه محليًا."; price=""; recognized=""; source="USER_ENTERED"; screen="history" } }
+                                scope.launch { if(dao.all().any { Logic.duplicate(it,item) }) message="العرض مسجل بالفعل خلال ٩٠ ثانية." else { dao.insert(item); if(comparisonOrigin.isBlank() && pickups.none { Logic.same(it.name,item.origin) }) comparisonOrigin=item.origin; message="تم تأكيد العرض وحفظه محليًا."; price=""; recognized=""; source="USER_ENTERED"; screen="history" } }
                             }
                         },modifier=Modifier.fillMaxWidth().heightIn(min=52.dp),shape=RoundedCornerShape(14.dp)) { Text("تأكيد وحفظ العرض",fontWeight=FontWeight.Bold) }
                     }
@@ -229,29 +241,88 @@ class ComposeActivity : ComponentActivity() {
                 }) { Text("حفظ النتيجة") }
             }
             "forecast" -> {
-                Text("توقعات أوقات المغادرة من السجل المحلي")
-                Text("التوقع يعتمد على ساعة القاهرة في السجل، ولا يعرف تغيّر الطلب اللحظي. الأوقات داخل الساعة قد تتساوى؛ ليست أسعارًا مباشرة ولا ضمانًا للتوفير.")
-                val reference=items.firstOrNull()
-                if(reference==null) Text(Logic.forecastMessage(items)) else {
-                    Text("${reference.provider} · ${reference.category} · ${reference.origin} ← ${reference.destination}")
-                    if(forecasts.isEmpty()) Text("جارٍ حساب التوقعات…")
-                    forecasts.forEach { (minutes,prediction) ->
-                        Text(if(prediction==null) "${if(minutes==0) "الآن" else "بعد $minutes دقيقة"}: بيانات غير كافية أو لم يجتز التحقق الزمني." else "${if(minutes==0) "الآن" else "بعد $minutes دقيقة"}: ${prediction.low}–${prediction.high} جنيه؛ الوسيط ${prediction.median} جنيه. العينات ${prediction.count}، الخطأ ${"%.1f".format(prediction.mae)} جنيه، التغطية ${"%.0f".format(prediction.coverage*100)}٪.")
+                Text("اختيار وقت الطلب",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                Text("بنحسب من عروض نفس الرحلة والتطبيق والفئة اللي اتسجلت عندك. مش قراءة لحظية لأسعار التطبيقات.",color=Color(0xff61756b))
+                OutlinedTextField(valueOfTime,{valueOfTime=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("قيمة دقيقة الانتظار بالجنيه")},supportingText={Text("سيبها صفر لو مش عايز تحسب تكلفة الانتظار.")})
+                Text("أقصى انتظار")
+                Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) { listOf(5,10,15,30).forEach { minutes -> FilterChip(selected=maxWait==minutes,onClick={maxWait=minutes},label={Text("$minutes د")}) } }
+                if(Logic.parseNonNegative(valueOfTime)==null) Text("أدخل قيمة انتظار صحيحة من صفر أو أكبر.")
+                else if(reference==null) Text("سجّل عروض لنقطة البداية والوجهة عشان نبدأ الحساب.")
+                else {
+                    Text("${reference.provider} · ${reference.category} · ${reference.origin} ← ${reference.destination}",style=MaterialTheme.typography.bodySmall)
+                    if(analysisRunning) Text("بنحسب من سجل أسعارك…") else {
+                        val current=Logic.fresh(reference,now)
+                        if(current) Text("العرض الحالي: ${reference.price} جنيه · وقت الإدخال ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(reference.captured))}",fontWeight=FontWeight.Bold)
+                        else Text("آخر عرض قديم؛ سجّل عرضًا حديثًا لحساب احتمال التوفير والمقارنة مع الآن.")
+                        val eligible=options.filter { it.chanceCheaper != null }
+                        val best=eligible.minByOrNull { it.generalizedCost }
+                        if(current && best!=null) {
+                            val net=reference.price-best.generalizedCost
+                            val recommendation=if(net>0) "الاختيار الحسابي: انتظر ${best.minutes} دقيقة. التوفير المتوقع بعد تكلفة الانتظار ${"%.1f".format(net)} جنيه." else "الاختيار الحسابي: اطلب الآن؛ انتظار الخيارات المدروسة لا يُظهر توفيرًا متوقعًا بعد تكلفة الوقت."
+                            Surface(color=Color(0xffe7f2e6),shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth()) { Text(recommendation,Modifier.padding(16.dp),fontWeight=FontWeight.Bold) }
+                        } else if(options.isNotEmpty()) Text("نحتاج عرضًا حديثًا و٢٠ اختبارًا تاريخيًا على خمسة أيام مختلفة على الأقل لحساب احتمال التوفير واختيار وقت.")
+                        if(options.isEmpty()) Text("البيانات مش كفاية أو النموذج ما اجتازش التحقق الزمني. سجّل عروض أكتر لنفس الرحلة.")
+                        options.forEach { option -> Surface(color=Color.White,shape=RoundedCornerShape(16.dp),modifier=Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(15.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                Text("بعد ${option.minutes} دقيقة · متوسط تقديري ${"%.1f".format(option.expectedFare)} جنيه",fontWeight=FontWeight.Bold)
+                                Text(if(!current || option.chanceCheaper==null) "احتمال التوفير غير متاح بعد" else "احتمال سعر أقل من العرض الحالي: ${"%.0f".format(option.chanceCheaper*100)}٪ · ${option.forecast.residuals.size} اختبارًا عبر ${option.forecast.validationDays} أيام",style=MaterialTheme.typography.bodySmall)
+                                Text("نطاق تاريخي ${"%.1f".format(option.forecast.low)}–${"%.1f".format(option.forecast.high)} جنيه · خطأ ${"%.1f".format(option.forecast.mae)} جنيه",style=MaterialTheme.typography.bodySmall)
+                            }
+                        } }
+                        Text("ساعات أقل سعرًا تاريخيًا",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                        if(cheaperHours.isEmpty()) Text("نحتاج عروضًا موزعة على ساعات وأيام مختلفة عشان نقارن.") else cheaperHours.forEach { hour -> Text("الساعة ${hour.hour}:00 · وسيط ${"%.1f".format(hour.median)} جنيه · ${hour.samples} عرض عبر ${hour.days} أيام") }
+                        Text("ساعات مرتفعة تاريخيًا",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                        if(peakHours.isEmpty()) Text("لسه مفيش أيام وعروض كفاية لتحديد ساعات مرتفعة لنفس الرحلة.") else peakHours.forEach { peak -> Text("الساعة ${peak.hour}:00 · وسيط ${"%.1f".format(peak.median)} جنيه · ${peak.samples} عرض عبر ${peak.days} أيام") }
+                        Text("الساعات مرتبطة بسجلك وليست قياسًا مباشرًا للطلب. التقديرات تعمل على مستوى الساعة؛ قد تتساوى فترات الدقائق، ولا يوجد ضمان للتوفير.",style=MaterialTheme.typography.bodySmall,color=Color(0xff718176))
                     }
                 }
-                Text("الترتيب الفوري يستخدم العروض الحديثة فقط. لا نوصي بموضع التقاط تلقائي دون تحقق موثوق من سلامة المشاة.")
             }
             "pickups" -> {
-                Text("نقاط يحددها المستخدم")
-                Text("لا تتوفر بيانات موثوقة للتحقق من قانونية النقطة أو أمانها أو إمكانية الوصول إليها. لا يصنف التطبيق أي نقطة على أنها آمنة ولا يوصي بها تلقائيًا.")
-                OutlinedTextField(pickupName,{pickupName=it},label={Text("وصف نقطة الالتقاء")})
-                OutlinedTextField(pickupNote,{pickupNote=it},label={Text("ملاحظة اختيارية")})
+                Text("أقل نقطة التقاط",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                Text("قارن عروضًا حديثة لنفس التطبيق والفئة والوجهة. راجع مسار المشي بنفسك في الخرائط؛ التطبيق لا يتحقق من سلامة الطريق.")
+                OutlinedTextField(comparisonOrigin,{comparisonOrigin=it},modifier=Modifier.fillMaxWidth(),label={Text("بداية المشوار الأصلية")})
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(maxWalkMeters,{maxWalkMeters=it},modifier=Modifier.weight(1f),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("أقصى مشي (م)")})
+                    OutlinedTextField(maxWalkMinutes,{maxWalkMinutes=it},modifier=Modifier.weight(1f),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("أقصى وقت (د)")})
+                }
+                OutlinedTextField(valueOfTime,{valueOfTime=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("قيمة دقيقة المشي بالجنيه")})
+                val meters=Logic.parsePrice(maxWalkMeters); val minutes=Logic.parsePrice(maxWalkMinutes); val cost=Logic.parseNonNegative(valueOfTime)
+                val candidateBaseline=reference?.takeIf { comparisonOrigin.isNotBlank() && Logic.same(it.origin,comparisonOrigin) && Logic.fresh(it,now) }
+                val ranked=if(candidateBaseline!=null && meters!=null && minutes!=null && cost!=null) PickupAnalysis.compare(candidateBaseline,items,pickups,now,meters,minutes,cost) else emptyList()
+                if(meters==null||minutes==null||cost==null) Text("أدخل حدودًا صالحة للمشي وقيمة وقت صحيحة.")
+                else if(candidateBaseline==null) Text("أدخل بداية المشوار وسجّل لها عرضًا حديثًا أولًا.")
+                else if(ranked.isEmpty()) Text("لا توجد نقطة بمسار مباشر حسب مراجعتك وعرض حديث مطابق داخل حدود المشي.")
+                else {
+                    val best=ranked.first()
+                    Text(if(best.netSavings>0) "أقل تكلفة من العروض المدخلة: ${best.point.name} — ${best.quote.price} جنيه" else "البداية الأصلية أقل تكلفة بعد حساب المشي.",fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary)
+                    Text("${best.point.name}: فرق السعر ${"%.1f".format(best.savings)} جنيه، وبعد تكلفة المشي ${"%.1f".format(best.netSavings)} جنيه. الاتجاه مباشر حسب مراجعتك؛ سلامة النقطة غير متحققة، وانتظار السائق والرسوم غير المحسوبة غير داخلين في المقارنة.")
+                    ranked.drop(1).forEach { Text("${it.point.name}: ${it.quote.price} جنيه · الفرق بعد المشي ${"%.1f".format(it.netSavings)} جنيه") }
+                }
+                HorizontalDivider()
+                Text("إضافة نقطة للمقارنة",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                OutlinedTextField(pickupName,{pickupName=it},modifier=Modifier.fillMaxWidth(),label={Text("اسم النقطة كما سيظهر في العرض")})
+                OutlinedTextField(pickupNote,{pickupNote=it},modifier=Modifier.fillMaxWidth(),label={Text("ملاحظة اختيارية")})
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(walkMeters,{walkMeters=it},modifier=Modifier.weight(1f),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("مسافة المشي (م)")})
+                    OutlinedTextField(walkMinutes,{walkMinutes=it},modifier=Modifier.weight(1f),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("وقت المشي (د)")})
+                }
+                Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { Checkbox(checked=direct,onCheckedChange={direct=it}); Text("راجعت مسار المشي وأعتبره مباشرًا") }
+                Text("المسافة والوقت من مراجعتك، وليسا تقديرًا بخط مستقيم.",style=MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick={
+                    val link=MapsLinks.forWalkingTrip(comparisonOrigin,pickupName)
+                    if(link==null) message="أدخل بداية المشوار واسم النقطة لفتح مسار المشي."
+                    else try { context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(link))) } catch (_: android.content.ActivityNotFoundException) { message="لا يوجد تطبيق خرائط أو متصفح متاح." }
+                }) { Text("راجع مسار المشي في Google Maps") }
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected=pickupStatus=="UNKNOWN",onClick={pickupStatus="UNKNOWN"},label={Text("السلامة غير معروفة")})
                     FilterChip(selected=pickupStatus=="UNSAFE",onClick={pickupStatus="UNSAFE"},label={Text("غير آمنة")})
                 }
-                Button(onClick={ if(pickupName.isBlank()||pickupName.length>200||pickupNote.length>500) message="أدخل وصفًا صالحًا للنقطة." else scope.launch { dao.insertPickup(Pickup(name=pickupName.trim(),status=pickupStatus,note=pickupNote.trim(),recorded=System.currentTimeMillis())); pickupName="";pickupNote="";message="تم حفظ النقطة دون التحقق من سلامتها." } }) { Text("حفظ النقطة") }
-                pickups.forEach { point -> HorizontalDivider(); Text("${point.name} · ${if(point.status=="UNSAFE") "غير آمنة حسب إدخالك" else "السلامة غير معروفة"}\n${point.note}"); OutlinedButton(onClick={scope.launch{dao.deletePickup(point.id)}}) { Text("حذف النقطة") } }
+                Button(onClick={
+                    val distance=Logic.parsePrice(walkMeters); val duration=Logic.parsePrice(walkMinutes)
+                    if(pickupName.isBlank()||pickupName.length>200||pickupNote.length>500||distance==null||distance>10000||duration==null||duration>180) message="أدخل اسم النقطة ومسافة ووقت مشي صحيحين."
+                    else scope.launch { dao.insertPickup(Pickup(name=pickupName.trim(),status=pickupStatus,note=pickupNote.trim(),recorded=System.currentTimeMillis(),walkMeters=distance,walkMinutes=duration,direct=direct)); pickupName="";pickupNote="";walkMeters="";walkMinutes="";direct=false;message="تم حفظ النقطة. سجّل عرضًا لها للمقارنة." }
+                }) { Text("حفظ النقطة") }
+                pickups.forEach { point -> HorizontalDivider(); Text("${point.name} · ${if(point.status=="UNSAFE") "غير آمنة حسب إدخالك" else "السلامة غير معروفة"}\nالمشي: ${point.walkMeters ?: "غير مسجل"} م · ${point.walkMinutes ?: "غير مسجل"} د · ${if(point.direct==true) "مباشر حسب مراجعتك" else "المسار المباشر غير مؤكد"}\n${point.note}"); Row { OutlinedButton(onClick={origin=point.name;screen="capture"}) { Text("إضافة عرض للنقطة") }; TextButton(onClick={scope.launch{dao.deletePickup(point.id)}}) { Text("حذف") } } }
             }
             "research" -> {
                 Text("البحث العام سياق فقط، وليس سعرًا موثقًا.")

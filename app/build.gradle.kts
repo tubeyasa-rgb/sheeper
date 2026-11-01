@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.ar5as.mashwar"
     compileSdk = 36
-    defaultConfig { applicationId = "com.ar5as.mashwar"; minSdk = 26; targetSdk = 36; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; versionCode = 4; versionName = "0.4.0" }
+    defaultConfig { applicationId = "com.ar5as.mashwar"; minSdk = 26; targetSdk = 36; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; versionCode = 5; versionName = "0.5.0" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
@@ -25,6 +25,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.xerial:sqlite-jdbc:3.45.3.0")
+    testImplementation("org.slf4j:slf4j-nop:2.0.13")
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

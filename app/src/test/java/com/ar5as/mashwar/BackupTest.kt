@@ -12,7 +12,7 @@ import javax.crypto.spec.SecretKeySpec
 class BackupTest {
     @Test fun roundTripProtectsAndRestoresFeedbackAndPickup() {
         val row=Observation(origin="home",destination="work",provider="provider",category="economy",price=50.0,captured=1000,actualPaid=65.0,acceptedFare=60.0,bookingSuccess=true)
-        val point=Pickup(name="private-location",status="UNSAFE",note="avoid",recorded=1000)
+        val point=Pickup(name="private-location",status="UNSAFE",note="avoid",recorded=1000,walkMeters=130.0,walkMinutes=3.0,direct=true)
         val encoded=Backup.encode(listOf(row),listOf(point),"correct password")
         assertFalse(String(encoded,Charsets.ISO_8859_1).contains("private-location"))
         val decoded=Backup.decode(encoded,"correct password")

@@ -10,6 +10,12 @@ class MapsLinksTest {
         assertTrue(URLDecoder.decode(link, "UTF-8").contains("destination=ميدان التحرير & شارع"))
         assertFalse(link.contains("destination=ميدان التحرير & شارع"))
     }
+    @Test fun walkingRouteRequiresBothEndsAndUsesWalkingMode() {
+        assertNull(MapsLinks.forWalkingTrip("", "corner"))
+        assertNull(MapsLinks.forWalkingTrip("start", ""))
+        val link=MapsLinks.forWalkingTrip("مصر الجديدة", "corner & square")!!
+        assertTrue(link.contains("travelmode=walking")); assertTrue(link.contains("corner+%26+square"))
+    }
     @Test fun blankOriginSearchesAndBlankDestinationRejected() {
         assertTrue(MapsLinks.forTrip(" ", "Cairo")!!.contains("/search/?api=1&query=Cairo"))
         assertNull(MapsLinks.forTrip("Cairo", " "))
