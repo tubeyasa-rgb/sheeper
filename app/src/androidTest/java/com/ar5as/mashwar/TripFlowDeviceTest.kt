@@ -11,7 +11,7 @@ import org.junit.runner.RunWith
 class TripFlowDeviceTest {
     @get:Rule val compose=createAndroidComposeRule<ComposeActivity>()
     @Test fun manualQuoteAndFeedback() {
-        compose.onNodeWithText("إضافة عرض أو قراءة صورة").performClick()
+        compose.onNodeWithText("إضافة عرض").performClick()
         compose.onNodeWithText("نقطة الانطلاق").performScrollTo().performTextInput("origin fixture")
         compose.onNodeWithText("الوجهة").performScrollTo().performTextInput("destination fixture")
         compose.onNodeWithText("التطبيق").performScrollTo().performTextInput("test provider")

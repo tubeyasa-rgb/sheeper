@@ -1,24 +1,34 @@
 package com.ar5as.mashwar
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -34,7 +44,9 @@ class ComposeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val db=RideDb.open(applicationContext)
         @Suppress("DEPRECATION") val shared: Uri? = if (intent?.action == Intent.ACTION_SEND) intent.getParcelableExtra(Intent.EXTRA_STREAM) else null
-        setContent { CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) { MaterialTheme { App(db,shared) } } }
+        setContent { CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xff185b48), onPrimary = Color.White, secondary = Color(0xff668b4b), background = Color(0xfff6f7f2), surface = Color.White, onSurface = Color(0xff183a30), outline = Color(0xffbacbc0))) { App(db,shared) }
+        } }
     }
 }
 
@@ -44,8 +56,11 @@ class ComposeActivity : ComponentActivity() {
     val pickups by dao.observePickups().collectAsState(initial=emptyList())
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(15000) } }
-    var screen by remember { mutableStateOf(if (shared != null) "capture" else "home") }
-    var origin by remember { mutableStateOf("") }; var destination by remember { mutableStateOf("") }
+    var screen by rememberSaveable { mutableStateOf(if (shared != null) "capture" else "home") }
+    var origin by rememberSaveable { mutableStateOf("") }; var destination by rememberSaveable { mutableStateOf("") }
+    var locationInfo by rememberSaveable { mutableStateOf("") }; var locating by remember { mutableStateOf(false) }; var showLocationSettings by remember { mutableStateOf(false) }
+    var selectedDestinationCoordinates by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchingPlaces by remember { mutableStateOf(false) }; var places by remember { mutableStateOf<List<PlaceSuggestion>>(emptyList()) }; var placesMessage by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf("") }; var category by remember { mutableStateOf("") }; var price by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }; var recognized by remember { mutableStateOf("") }; var password by remember { mutableStateOf("") }
     var deleteConfirm by remember { mutableStateOf(false) }; var source by remember { mutableStateOf("USER_ENTERED") }
@@ -53,6 +68,59 @@ class ComposeActivity : ComponentActivity() {
     var pickupName by remember { mutableStateOf("") }; var pickupNote by remember { mutableStateOf("") }; var pickupStatus by remember { mutableStateOf("UNKNOWN") }
     var forecasts by remember { mutableStateOf<List<Pair<Int,ForecastResult?>>>(emptyList()) }
     LaunchedEffect(items, now / 60000, screen) { if(screen == "forecast") { val reference=items.firstOrNull(); forecasts=withContext(Dispatchers.Default) { listOf(0,5,10,15,30).map { minutes -> minutes to reference?.let { ForecastEngine.forecast(items.filter { row -> row.captured <= now },it,now + minutes * 60_000L) } } } } }
+    BackHandler(enabled = screen != "home") { screen = "home"; message = "" }
+    fun locate() {
+        if (locating) return
+        scope.launch {
+            locating = true
+            showLocationSettings = false
+            locationInfo = "بنحدد مكانك..."
+            try {
+                when (val result = currentLocation(context)) {
+                    is LocationResult.Found -> {
+                        origin = String.format(java.util.Locale.US, "%.6f,%.6f", result.location.latitude, result.location.longitude)
+                        locationInfo = "تم تحديد موقعك. تقدر تعدله قبل فتح الخرائط."
+                    }
+                    LocationResult.PermissionRequired -> locationInfo = "اسمح بالوصول للموقع عشان نحدد مكانك، أو اكتب نقطة الانطلاق يدويًا."
+                    LocationResult.Disabled -> { locationInfo = "شغّل الموقع في إعدادات جهازك، أو اكتب نقطة الانطلاق يدويًا."; showLocationSettings = true }
+                    LocationResult.Unavailable -> locationInfo = "ما قدرناش نحدد مكانك دلوقتي. حاول في مكان مفتوح أو اكتب نقطة الانطلاق يدويًا."
+                }
+            } finally { locating = false }
+        }
+    }
+    val requestLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true || permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true) locate()
+        else locationInfo = "إذن الموقع غير مفعّل. تقدر تكتب نقطة الانطلاق بنفسك."
+    }
+    fun requestCurrentLocation() {
+        val allowed = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (allowed) locate() else requestLocation.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+    fun findPlaces() {
+        val query = destination.trim()
+        if (query.isEmpty()) { placesMessage = "اكتب اسم المكان الأول."; return }
+        if (query.length > 200) { placesMessage = "اسم المكان طويل جدًا."; return }
+        if (searchingPlaces) return
+        scope.launch {
+            searchingPlaces = true; places = emptyList(); placesMessage = ""
+            try {
+                when (val result = searchPlaces(context, query)) {
+                    is PlaceSearchResult.Found -> if (destination.trim() == query) {
+                        places = result.places
+                        placesMessage = if (places.isEmpty()) "ملقيناش نتائج. جرّب اسم تاني أو افتح Google Maps." else "اختار المكان من النتائج."
+                    }
+                    PlaceSearchResult.Unavailable -> placesMessage = "البحث مش متاح على الجهاز دلوقتي. تقدر تفتح Google Maps مباشرة."
+                }
+            } finally { searchingPlaces = false }
+        }
+    }
+    fun openTripInMaps() {
+        val url = MapsLinks.forTrip(origin, selectedDestinationCoordinates ?: destination)
+        if (url == null) { message = "اكتب الوجهة الأول عشان نفتحها على الخريطة."; return }
+        try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        catch (_: android.content.ActivityNotFoundException) { message = "مفيش تطبيق خرائط أو متصفح متاح على الجهاز." }
+    }
     fun scan(uri: Uri) {
         try {
             message="جارٍ قراءة الصورة على الجهاز..."
@@ -79,43 +147,70 @@ class ComposeActivity : ComponentActivity() {
         }
         if (shared != null) scan(shared)
     }
-    Surface(modifier=Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
-        Text("أرخص مشوار",style=MaterialTheme.typography.headlineMedium)
-        if(message.isNotBlank()) Text(message,color=MaterialTheme.colorScheme.primary)
+    Surface(modifier=Modifier.fillMaxSize(), color=MaterialTheme.colorScheme.background) { Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal=20.dp, vertical=18.dp), verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        if (screen != "home") {
+            TextButton(onClick={screen="home";message=""}, contentPadding=PaddingValues(0.dp)) { Text("‹  الرئيسية", fontWeight=FontWeight.Bold) }
+            Text(when(screen) { "capture" -> "إضافة عرض"; "history" -> "عروضي"; "forecast" -> "التوقعات"; "feedback" -> "نتيجة الرحلة"; "pickups" -> "نقاط الالتقاء"; "research" -> "البحث والخرائط"; else -> "الإعدادات" },style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)
+        }
+        if(message.isNotBlank()) Surface(color=Color(0xffe7f2e6), shape=RoundedCornerShape(12.dp), modifier=Modifier.fillMaxWidth()) { Text(message, modifier=Modifier.padding(12.dp), color=MaterialTheme.colorScheme.primary) }
         when(screen) {
-            "home" -> {
-                Text("قارن عروضك المحفوظة محليًا؛ لا نضمن استمرار السعر أو تحقيق توفير.")
-                Button(onClick={screen="capture"}) { Text("إضافة عرض أو قراءة صورة") }
-                Button(onClick={screen="history"}) { Text("المقارنة والسجل") }
-                Button(onClick={screen="forecast"}) { Text("التوقعات والتوصيات") }
-                Button(onClick={screen="pickups"}) { Text("نقاط الالتقاء والسلامة") }
-                Button(onClick={screen="research"}) { Text("البحث والخرائط") }
-                Button(onClick={screen="settings"}) { Text("النسخ الاحتياطي والإعدادات") }
-            }
+            "home" -> TripHome(origin=origin, onOriginChange={ origin=it; locationInfo="" }, destination=destination, onDestinationChange={destination=it; selectedDestinationCoordinates=null; places=emptyList(); placesMessage=""}, locating=locating, locationInfo=locationInfo, showLocationSettings=showLocationSettings, searchingPlaces=searchingPlaces, places=places, placesMessage=placesMessage, onLocate={requestCurrentLocation()}, onLocationSettings={ try { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) } catch (_: android.content.ActivityNotFoundException) { locationInfo="افتح إعدادات الجهاز وشغّل الموقع." } }, onFindPlaces={findPlaces()}, onPlaceSelected={ place -> destination=place.label; selectedDestinationCoordinates=String.format(java.util.Locale.US, "%.6f,%.6f", place.latitude, place.longitude); places=emptyList(); placesMessage="تم اختيار المكان." }, onOpenMaps={openTripInMaps()}, onNavigate={screen=it;message=""})
             "capture" -> {
-                Text("راجع النص، ثم أدخل بيانات العرض وأكّد حفظها. لا تُحفظ الصورة.")
-                OutlinedButton(onClick={pick.launch("image/*")}) { Text("اختيار صورة لقراءة النص") }
-                if(recognized.isNotBlank()) Text("النص المقروء للمراجعة:\n$recognized",style=MaterialTheme.typography.bodySmall)
-                OutlinedTextField(origin,{origin=it},label={Text("نقطة الانطلاق")}); OutlinedTextField(destination,{destination=it},label={Text("الوجهة")})
-                OutlinedTextField(provider,{provider=it},label={Text("التطبيق")}); OutlinedTextField(category,{category=it},label={Text("فئة الخدمة")}); OutlinedTextField(price,{price=it},label={Text("السعر بالجنيه")})
-                Button(onClick={
-                    val n=Logic.parsePrice(price); val texts=listOf(origin,destination,provider,category)
-                    if(n==null || texts.any { it.isBlank() || it.length>200 }) message="أكمل البيانات وأدخل سعرًا صحيحًا."
-                    else { val item=Observation(origin=origin.trim(),destination=destination.trim(),provider=provider.trim(),category=category.trim(),price=n,captured=System.currentTimeMillis(),provenance=source)
-                        scope.launch { if(dao.all().any { Logic.duplicate(it,item) }) message="العرض مسجل بالفعل خلال ٩٠ ثانية." else { dao.insert(item); message="تم تأكيد العرض وحفظه محليًا."; price=""; recognized=""; source="USER_ENTERED"; screen="history" } }
+                Text("سجّل السعر اللي ظهر لك في تطبيق المشاوير.", style=MaterialTheme.typography.bodyLarge, color=Color(0xff61756b))
+                Surface(color=Color.White,shape=RoundedCornerShape(22.dp),shadowElevation=1.dp,modifier=Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                        Text("تفاصيل الرحلة",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                        OutlinedTextField(origin,{origin=it; locationInfo=""},modifier=Modifier.fillMaxWidth(),singleLine=true,label={Text("نقطة الانطلاق")},shape=RoundedCornerShape(14.dp))
+                        OutlinedButton(onClick={requestCurrentLocation()},enabled=!locating,modifier=Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp)) { Text(if(locating) "جارٍ تحديد موقعك..." else "استخدم موقعي الحالي") }
+                        if(locationInfo.isNotBlank()) Text(locationInfo,style=MaterialTheme.typography.bodySmall,color=Color(0xff536b61))
+                        OutlinedTextField(destination,{destination=it;selectedDestinationCoordinates=null},modifier=Modifier.fillMaxWidth(),singleLine=true,label={Text("الوجهة")},shape=RoundedCornerShape(14.dp))
+                        HorizontalDivider()
+                        Text("تفاصيل العرض",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold)
+                        OutlinedTextField(provider,{provider=it},modifier=Modifier.fillMaxWidth(),singleLine=true,label={Text("التطبيق")},shape=RoundedCornerShape(14.dp))
+                        OutlinedTextField(category,{category=it},modifier=Modifier.fillMaxWidth(),singleLine=true,label={Text("فئة الخدمة")},shape=RoundedCornerShape(14.dp))
+                        OutlinedTextField(price,{price=it},modifier=Modifier.fillMaxWidth(),singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Decimal),label={Text("السعر بالجنيه")},shape=RoundedCornerShape(14.dp))
+                        OutlinedButton(onClick={pick.launch("image/*")},modifier=Modifier.fillMaxWidth(),shape=RoundedCornerShape(14.dp)) { Text("اختيار صورة لقراءة النص") }
+                        Text("الصورة لا تُحفظ. راجع النص والسعر قبل التأكيد.",style=MaterialTheme.typography.bodySmall,color=Color(0xff6d7c72))
+                        if(recognized.isNotBlank()) Text("النص المقروء للمراجعة:\n$recognized",style=MaterialTheme.typography.bodySmall)
+                        Button(onClick={
+                            val n=Logic.parsePrice(price); val texts=listOf(origin,destination,provider,category)
+                            if(n==null || texts.any { it.isBlank() || it.length>200 }) message="أكمل البيانات وأدخل سعرًا صحيحًا."
+                            else { val item=Observation(origin=origin.trim(),destination=destination.trim(),provider=provider.trim(),category=category.trim(),price=n,captured=System.currentTimeMillis(),provenance=source)
+                                scope.launch { if(dao.all().any { Logic.duplicate(it,item) }) message="العرض مسجل بالفعل خلال ٩٠ ثانية." else { dao.insert(item); message="تم تأكيد العرض وحفظه محليًا."; price=""; recognized=""; source="USER_ENTERED"; screen="history" } }
+                            }
+                        },modifier=Modifier.fillMaxWidth().heightIn(min=52.dp),shape=RoundedCornerShape(14.dp)) { Text("تأكيد وحفظ العرض",fontWeight=FontWeight.Bold) }
                     }
-                }) { Text("تأكيد وحفظ العرض") }
+                }
             }
             "history" -> {
-                Text("قارن عروض المسار والفئة نفسيهما فقط. مدة الحداثة ٣ دقائق من الإدخال.")
-                val first=items.firstOrNull(); if(first==null) Text("لا توجد عروض بعد.") else {
+                Text("العروض لنفس المسار والفئة. يظل العرض حديثًا لمدة ٣ دقائق من إدخاله.", color=Color(0xff61756b))
+                val first=items.firstOrNull()
+                if(first==null) {
+                    Surface(color=Color.White,shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) { Text("لسه مفيش عروض",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold); Text("أضف أول عرض عشان تبدأ المقارنة.",color=Color(0xff6d7c72)); Button(onClick={screen="capture"}) { Text("إضافة عرض") } } }
+                } else {
                     val candidates=items.filter { Logic.comparable(it,first) && Logic.fresh(it,now) }
-                    if(candidates.size>=2) Logic.lowest(candidates,first,now)?.let { Text("أقل عرض حديث: ${it.provider} — ${it.price} جنيه. تحقق قبل الحجز.") } else Text("تحتاج المقارنة عرضين حديثين للرحلة والفئة نفسيهما.")
+                    if(candidates.size>=2) Logic.lowest(candidates,first,now)?.let { Text("أقل عرض حديث: ${it.provider} — ${it.price} جنيه. تحقق قبل الحجز.",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold) }
+                    else Text("أضف عرضين حديثين لنفس الرحلة والفئة عشان تقارن.",color=Color(0xff6d7c72))
                 }
-                items.forEach { item -> HorizontalDivider(); Text("${item.provider} · ${item.category}\n${item.origin} ← ${item.destination}\n${item.price} جنيه · ${if(Logic.fresh(item,now)) "حديث" else "قديم"}\n${DateFormat.getDateTimeInstance().format(Date(item.captured))} · ${if(item.provenance=="USER_CONFIRMED_SCREENSHOT") "صورة أكدها المستخدم" else "إدخال أو استيراد مستخدم"}"); if(item.actualPaid!=null || item.acceptedFare!=null || item.bookingSuccess!=null) Text("نتيجة الرحلة: المدفوع ${item.actualPaid ?: "غير مسجل"}، المقبول ${item.acceptedFare ?: "غير مسجل"}، الحجز ${when(item.bookingSuccess){true->"نجح";false->"لم ينجح";null->"غير مسجل"}}")
-                    OutlinedButton(onClick={selectedId=item.id; paid=item.actualPaid?.toString()?:""; accepted=item.acceptedFare?.toString()?:""; success=item.bookingSuccess; screen="feedback"}) { Text("تسجيل نتيجة الرحلة") }
-                    OutlinedButton(onClick={scope.launch { dao.delete(item.id) }}) { Text("حذف") } }
-                OutlinedButton(onClick={deleteConfirm=true}) { Text("حذف كل السجل") }
+                items.forEach { item ->
+                    Surface(color=Color.White,shape=RoundedCornerShape(20.dp),shadowElevation=1.dp,modifier=Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(17.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
+                                Column(Modifier.weight(1f)) { Text(item.provider,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.Bold); Text(item.category,style=MaterialTheme.typography.bodySmall,color=Color(0xff718176)) }
+                                Text("${item.price} جنيه",style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)
+                            }
+                            Text("${item.origin} ← ${item.destination}")
+                            Text("${if(Logic.fresh(item,now)) "حديث" else "قديم"} · ${DateFormat.getDateTimeInstance().format(Date(item.captured))}",style=MaterialTheme.typography.bodySmall,color=Color(0xff718176))
+                            Text(if(item.provenance=="USER_CONFIRMED_SCREENSHOT") "صورة أكدها المستخدم" else "إدخال أو استيراد مستخدم",style=MaterialTheme.typography.bodySmall,color=Color(0xff718176))
+                            if(item.actualPaid!=null || item.acceptedFare!=null || item.bookingSuccess!=null) Text("نتيجة الرحلة: المدفوع ${item.actualPaid ?: "غير مسجل"}، المقبول ${item.acceptedFare ?: "غير مسجل"}، الحجز ${when(item.bookingSuccess){true->"نجح";false->"لم ينجح";null->"غير مسجل"}}",style=MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick={selectedId=item.id; paid=item.actualPaid?.toString()?:""; accepted=item.acceptedFare?.toString()?:""; success=item.bookingSuccess; screen="feedback"}) { Text("تسجيل نتيجة الرحلة") }
+                                TextButton(onClick={scope.launch { dao.delete(item.id) }}) { Text("حذف") }
+                            }
+                        }
+                    }
+                }
+                if(items.isNotEmpty()) TextButton(onClick={deleteConfirm=true}) { Text("حذف كل السجل") }
             }
             "feedback" -> {
                 Text("نتيجة الرحلة اختيارية؛ عرض inDrive المقترح لا يعني قبول السائق. أدخل السعر المقبول والمدفوع إن عُرفا.")
@@ -160,9 +255,9 @@ class ComposeActivity : ComponentActivity() {
             }
             "research" -> {
                 Text("البحث العام سياق فقط، وليس سعرًا موثقًا.")
-                OutlinedTextField(destination,{destination=it},label={Text("نص البحث")})
+                OutlinedTextField(destination,{destination=it;selectedDestinationCoordinates=null},label={Text("نص البحث")})
                 Button(onClick={ try { context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/search").buildUpon().appendQueryParameter("q",destination).build())) } catch (_: Exception) { message="لا يوجد متصفح متاح." } }) { Text("فتح بحث عام") }
-                Button(onClick={ try { context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("geo:0,0").buildUpon().appendQueryParameter("q",destination).build())) } catch (_: Exception) { message="لا يوجد تطبيق خرائط متاح." } }) { Text("فتح الخرائط") }
+                Button(onClick={ openTripInMaps() }) { Text("افتح في Google Maps") }
             }
             "settings" -> {
                 Text("البيانات على جهازك. إزالة التطبيق تحذفها؛ احتفظ بنسخة مشفرة لاستعادتها. لا تُرفع البيانات تلقائيًا.")
@@ -172,7 +267,7 @@ class ComposeActivity : ComponentActivity() {
                 Text("الاستيراد يضيف البيانات إلى السجل؛ احتفظ بكلمة المرور لأن استعادتها غير ممكنة دونها.")
             }
         }
-        if(screen!="home") TextButton(onClick={screen="home";message=""}) { Text("الرئيسية") }
+
     } }
     if(deleteConfirm) AlertDialog(onDismissRequest={deleteConfirm=false}, title={Text("حذف كل العروض ونقاط الالتقاء؟")}, text={Text("لا يمكن التراجع عن الحذف إلا باستعادة نسخة احتياطية.")},confirmButton={TextButton(onClick={scope.launch{dao.clearAll(); val legacy=context.getDatabasePath("rides.db"); val removed=!legacy.exists() || context.deleteDatabase("rides.db"); deleteConfirm=false;message=if(removed) "تم حذف السجل ونقاط الالتقاء." else "حُذفت البيانات الحالية، لكن تعذر حذف قاعدة البيانات القديمة."}}){Text("حذف")}},dismissButton={TextButton(onClick={deleteConfirm=false}){Text("إلغاء")}})
 }
